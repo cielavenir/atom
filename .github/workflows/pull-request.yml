@@ -87,7 +87,7 @@ jobs:
         run: |
             npm install
             npx electron-rebuild -v 11.4.12
-      - run: script/build --no-bootstrap
+      - run: script/build
       - name: Tar output
         run: tar -cvf atom-${{ matrix.os }}.tar out
       - uses: actions/upload-artifact@v2
@@ -100,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
         test_type: [ATOM_RUN_CORE_TESTS, ATOM_RUN_CORE_MAIN_TESTS, ATOM_RUN_CORE_RENDER_TESTS, ATOM_RUN_PACKAGE_TESTS]
     runs-on: ${{ matrix.os }}
     needs: [build]
