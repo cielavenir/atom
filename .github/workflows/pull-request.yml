@@ -1,0 +1,166 @@
+name: Atom
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  get_release_version:
+    name: Get Release Version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: script/vsts
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '12.18.3'
+          cache: 'npm'
+      - run: npm install
+      - run: node get-release-version.js
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: script
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '12.18.3'
+      - name: Cache script dependencies
+        id: script-deps
+        uses: actions/cache@v2
+        with:
+          path: script/node_modules
+          key: ${{ runner.os }}-script-${{ hashFiles('script/package-lock.json') }}
+      - run: npm install
+        if: steps.script-deps.outputs.cache-hit != 'true'
+      - run: ./lint
+  build:
+    name: Build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    needs: [get_release_version, lint]
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '12.18.3'
+
+      - name: Cache script dependencies
+        id: script-deps
+        uses: actions/cache@v2
+        with:
+          path: script/node_modules
+          key: ${{ matrix.os }}-script-${{ hashFiles('script/package-lock.json') }}
+
+      - name: Cache apm dependencies
+        id: apm-deps
+        uses: actions/cache@v2
+        with:
+          path: apm/node_modules
+          key: ${{ matrix.os }}-apm-${{ hashFiles('apm/package-lock.json') }}
+
+      - name: Cache core dependencies
+        id: core-deps
+        uses: actions/cache@v2
+        with:
+          path: node_modules
+          key: ${{ matrix.os }}-core-deps-${{ hashFiles('package-lock.json') }}
+      - name:  Install script dependencies
+        if: steps.script-deps.outputs.cache-hit != 'true'
+        run: |
+            cd script
+            npm install
+      - name: Install apm
+        if: steps.apm-deps.outputs.cache-hit != 'true'
+        run: |
+            cd apm
+            npm install
+      - name: Install core dependencies
+        if: steps.core-deps.outputs.cache-hit != 'true'
+        run: |
+            npm install
+            npx electron-rebuild -v 11.4.12
+      - run: script/build --no-bootstrap
+      - name: Tar output
+        run: tar -cvf atom-${{ matrix.os }}.tar out
+      - uses: actions/upload-artifact@v2
+        with:
+            name: atom-${{ matrix.os }}
+            path: atom-${{ matrix.os }}.tar
+
+  test:
+    name: Test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        test_type: [ATOM_RUN_CORE_TESTS, ATOM_RUN_CORE_MAIN_TESTS, ATOM_RUN_CORE_RENDER_TESTS, ATOM_RUN_PACKAGE_TESTS]
+    runs-on: ${{ matrix.os }}
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '12.18.3'
+
+      - uses: actions/download-artifact@v2
+        name: Download Artifact
+        with:
+          name: atom-${{ matrix.os }}
+      - name: Extract Artifact
+        run: tar -xvf atom-${{ matrix.os }}.tar -C .
+
+      - name: Restor script dependencies
+        uses: actions/cache@v2
+        with:
+          path: script/node_modules
+          key: ${{ matrix.os }}-script-${{ hashFiles('script/package-lock.json') }}
+
+      - name: Restore apm dependencies
+        uses: actions/cache@v2
+        with:
+          path: apm/node_modules
+          key: ${{ matrix.os }}-apm-${{ hashFiles('apm/package-lock.json') }}
+
+      - name: Restore core dependencies
+        id: core-deps
+        uses: actions/cache@v2
+        with:
+          path: node_modules
+          key: ${{ matrix.os }}-core-deps-${{ hashFiles('package-lock.json') }}
+
+      - name: Run test
+        uses: GabrielBB/xvfb-action@v1
+        if: ${{ matrix.os == 'ubuntu-latest' && matrix.test_type == 'ATOM_RUN_CORE_MAIN_TESTS'}}
+        with:
+          run: |
+            echo "${{ matrix.test_type}}=true" >> $GITHUB_ENV
+            script/test
+
+      - name: Run test
+        uses: GabrielBB/xvfb-action@v1
+        if: ${{ matrix.os == 'macos-latest' }}
+        with:
+          run: |
+            echo "${{ matrix.test_type}}='true'" >> $GITHUB_ENV
+            script/test
+
+      - name: Run test
+        uses: GabrielBB/xvfb-action@v1
+        if: ${{ matrix.os == 'windows-latest' && matrix.test_type != 'ATOM_RUN_PACKAGE_TESTS'}}
+        with:
+          run: |
+            echo "${{ matrix.test_type}}='true'" >> $GITHUB_ENV
+            script/test
